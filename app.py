@@ -1,62 +1,102 @@
-# app.py
-from fastapi import FastAPI, File, UploadFile
-from pydantic import BaseModel
-import numpy as np
 import pandas as pd
-from PIL import Image
-import io
 import torch
-from torchvision import transforms
-from sklearn.feature_extraction.text import TfidfVectorizer
+from transformers import BertTokenizer, BertModel
+from symspellpy.symspellpy import SymSpell, Verbosity
+import streamlit as st
 from sklearn.metrics.pairwise import cosine_similarity
-import uvicorn
-from models import CRNN  # Replace with your actual CRNN model import
+import numpy as np
 
-app = FastAPI()
+# Load the dataset
+try:
+    df = pd.read_csv('drug_names.csv')
+    st.write("CSV Columns:", df.columns.tolist())  # Debugging line to print column names
+    if 'drug_names' in df.columns:
+        drug_names = df['drug_names'].tolist()
+    else:
+        st.error("Column 'drug_names' not found in the CSV file. Please check the column names.")
+        st.stop()
+except Exception as e:
+    st.error(f"Error reading CSV file: {e}")
+    st.stop()
 
-# Load drug names and create a TF-IDF model
-drug_names = pd.read_csv('drug_names.csv')['drug_name'].tolist()
-vectorizer = TfidfVectorizer()
-drug_name_vectors = vectorizer.fit_transform(drug_names)
+# Preprocess the drug names
+drug_names = [name.lower() for name in drug_names]
 
-# Load pre-trained CRNN model
-model = CRNN()  # Replace with your CRNN model initialization
-model.load_state_dict(torch.load('crnn_model.pth'))
-model.eval()
+# Load BERT model and tokenizer
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+model = BertModel.from_pretrained('bert-base-uncased')
 
-# Define image transformation
-transform = transforms.Compose([
-    transforms.Grayscale(),
-    transforms.Resize((128, 32)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
-])
-
-class Prediction(BaseModel):
-    predicted_drug_name: str
-
-@app.post("/predict", response_model=Prediction)
-async def predict(file: UploadFile = File(...)):
-    image = Image.open(io.BytesIO(await file.read()))
-    image = transform(image).unsqueeze(0)
-    
+# Function to get embeddings
+def get_embeddings(text):
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
     with torch.no_grad():
-        output = model(image)
+        outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1)
+
+# Get embeddings for all drug names
+drug_embeddings = torch.vstack([get_embeddings(name) for name in drug_names])
+
+# Spell correction setup
+sym_spell = SymSpell(max_dictionary_edit_distance=2)
+sym_spell.create_dictionary_entry("drug_name", 1)
+for name in drug_names:
+    sym_spell.create_dictionary_entry(name, 1)
+
+# Prediction function
+def predict_drug_name(input_text):
+    input_text = input_text.lower()
+    input_embedding = get_embeddings(input_text)
     
-    # Convert output to text (assuming you have a decoding function)
-    recognized_text = decode_output(output)  # Replace with actual decoding logic
+    # Correct spelling if necessary
+    suggestions = sym_spell.lookup(input_text, Verbosity.CLOSEST, max_edit_distance=2)
+    if suggestions:
+        input_text = suggestions[0].term
+        input_embedding = get_embeddings(input_text)
     
-    # Predict drug name
-    input_vector = vectorizer.transform([recognized_text])
-    similarities = cosine_similarity(input_vector, drug_name_vectors)
-    best_match_idx = np.argmax(similarities)
-    predicted_drug_name = drug_names[best_match_idx]
+    # Calculate similarity
+    similarities = cosine_similarity(input_embedding, drug_embeddings)
+    best_match_index = np.argmax(similarities)
+    return drug_names[best_match_index]
 
-    return Prediction(predicted_drug_name=predicted_drug_name)
+# Batch testing function
+def test_model(test_file):
+    test_df = pd.read_csv(test_file)
+    st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
+    if 'input_text' not in test_df.columns or 'correct_drug_name' not in test_df.columns:
+        st.error("Test file must contain 'input_text' and 'correct_drug_name' columns.")
+        return None
+    
+    correct_predictions = 0
+    for index, row in test_df.iterrows():
+        predicted_drug_name = predict_drug_name(row['input_text'])
+        if predicted_drug_name == row['correct_drug_name'].lower():  # Ensure case insensitivity
+            correct_predictions += 1
+    
+    accuracy = (correct_predictions / len(test_df)) * 100
+    return accuracy
 
-def decode_output(output):
-    # Add your decoding logic here
-    return "Sample Drug Name"
+# Streamlit app
+st.title("Doctor's Handwritten Prescription Prediction")
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Single input prediction
+input_text = st.text_input("Enter the partial or misspelled drug name:")
+if st.button("Predict"):
+    if input_text:
+        predicted_drug_name = predict_drug_name(input_text)
+        st.write(f"Predicted Drug Name: {predicted_drug_name}")
+    else:
+        st.write("Please enter a drug name to predict.")
+
+# Batch testing
+st.header("Batch Testing")
+uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
+if uploaded_file is not None:
+    st.write("Uploaded file preview:")
+    test_df = pd.read_csv(uploaded_file)
+    st.write(test_df.head())
+    st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
+    
+    if st.button("Start Batch Testing"):
+        accuracy = test_model(uploaded_file)
+        if accuracy is not None:
+            st.write(f"Accuracy: {accuracy:.2f}%")
