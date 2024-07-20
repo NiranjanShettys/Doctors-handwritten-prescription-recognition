@@ -3,10 +3,9 @@ import torch
 from transformers import DistilBertTokenizer, DistilBertModel
 from symspellpy.symspellpy import SymSpell, Verbosity
 import streamlit as st
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import pickle
-import time
+import faiss
 
 # Load the dataset
 def load_drug_names(file_path):
@@ -30,18 +29,11 @@ tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 model = DistilBertModel.from_pretrained('distilbert-base-uncased')
 
 # Function to get embeddings
-def get_embeddings(text):
-    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-    with torch.no_grad():
-        outputs = model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1)
-
-# Batch embedding function
-def get_batch_embeddings(texts):
+def get_embeddings(texts):
     inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True)
     with torch.no_grad():
         outputs = model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1)
+    return outputs.last_hidden_state.mean(dim=1).numpy()
 
 # Check if precomputed embeddings exist
 try:
@@ -49,36 +41,35 @@ try:
         drug_embeddings = pickle.load(f)
 except FileNotFoundError:
     # Get embeddings for all drug names
-    embeddings = [get_embeddings(name) for name in drug_names]
-    drug_embeddings = torch.vstack(embeddings)
+    embeddings = get_embeddings(drug_names)
+    drug_embeddings = np.vstack(embeddings)
 
     # Save embeddings for future use
     with open('drug_embeddings.pkl', 'wb') as f:
         pickle.dump(drug_embeddings, f)
 
+# Build FAISS index
+dimension = drug_embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(drug_embeddings)
+
 # Spell correction setup
 sym_spell = SymSpell(max_dictionary_edit_distance=2)
-sym_spell.create_dictionary_entry("drug_name", 1)
 for name in drug_names:
     sym_spell.create_dictionary_entry(name, 1)
 
 # Prediction function
 def predict_drug_name(input_text):
-    input_text = input_text.lower().strip()  # Ensure text is stripped of extra spaces
-    input_embedding = get_embeddings(input_text)
-    
-    # Correct spelling if necessary
+    input_text = input_text.lower().strip()
     suggestions = sym_spell.lookup(input_text, Verbosity.CLOSEST, max_edit_distance=2)
     if suggestions:
         corrected_text = suggestions[0].term
-        input_embedding = get_embeddings(corrected_text)
     else:
         corrected_text = input_text
     
-    # Calculate similarity
-    similarities = cosine_similarity(input_embedding.numpy(), drug_embeddings.numpy())
-    best_match_index = np.argmax(similarities)
-    predicted_drug_name = drug_names[best_match_index]
+    input_embedding = get_embeddings([corrected_text])
+    distances, indices = index.search(input_embedding, 1)
+    predicted_drug_name = drug_names[indices[0][0]]
     
     st.write(f"Input Text: {input_text}")
     st.write(f"Corrected Text: {corrected_text}")
@@ -95,51 +86,3 @@ if st.button("Predict"):
         st.write(f"Predicted Drug Name: {predicted_drug_name}")
     else:
         st.write("Please enter a drug name to predict.")
-
-# Optional: Batch testing (for evaluation purposes)
-st.header("Batch Testing")
-uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
-if uploaded_file is not None:
-    st.write("Uploaded file preview:")
-    try:
-        test_df = pd.read_csv(uploaded_file)
-        st.write(test_df.head())
-        st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
-    except Exception as e:
-        st.error(f"Error reading uploaded file: {e}")
-
-    if st.button("Start Batch Testing"):
-        try:
-            test_df = pd.read_csv(uploaded_file)
-            correct_predictions = 0
-            input_texts = test_df['input_text'].dropna().tolist()
-            correct_drug_names = test_df['correct_drug_name'].dropna().tolist()
-            total_tests = len(input_texts)
-
-            results = []
-            start_time = time.time()
-            for input_text, correct_drug_name in zip(input_texts, correct_drug_names):
-                predicted_drug_name = predict_drug_name(input_text)
-                results.append({
-                    'input_text': input_text,
-                    'predicted_drug_name': predicted_drug_name,
-                    'correct_drug_name': correct_drug_name
-                })
-                if predicted_drug_name == correct_drug_name.lower():
-                    correct_predictions += 1
-
-            accuracy = (correct_predictions / total_tests) * 100
-            end_time = time.time()
-            st.write(f"Accuracy: {accuracy:.2f}%")
-            st.write(f"Time taken for batch testing: {end_time - start_time:.2f} seconds")
-
-            results_df = pd.DataFrame(results)
-            st.write("Batch testing completed. You can download the predictions file below.")
-            st.download_button(
-                label="Download Predictions",
-                data=results_df.to_csv(index=False).encode('utf-8'),
-                file_name='predictions.csv',
-                mime='text/csv',
-            )
-        except Exception as e:
-            st.error(f"Error during batch testing: {e}")
