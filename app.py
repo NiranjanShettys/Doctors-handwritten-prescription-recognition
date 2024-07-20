@@ -1,88 +1,85 @@
-import pandas as pd
-import torch
-from transformers import BertTokenizer, BertModel
-from symspellpy.symspellpy import SymSpell, Verbosity
 import streamlit as st
-from sklearn.metrics.pairwise import cosine_similarity
+import pandas as pd
 import numpy as np
+import easyocr
+import faiss
+from transformers import BertTokenizer, BertModel
+import torch
 
-# Load the dataset
-df = pd.read_csv('drug_names.csv')
-drug_names = df['drug_names'].tolist()
-
-# Preprocess the drug names
-drug_names = [name.lower() for name in drug_names]
-
-# Load BERT model and tokenizer
+# Initialize EasyOCR and BERT model
+ocr_reader = easyocr.Reader(['en'])
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 model = BertModel.from_pretrained('bert-base-uncased')
 
-# Function to get embeddings
-def get_embeddings(text):
-    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
+def get_embedding(text):
+    """Get BERT embedding for a given text."""
+    inputs = tokenizer(text, return_tensors='pt')
     with torch.no_grad():
         outputs = model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1)
+    return outputs.last_hidden_state.mean(dim=1).numpy()
 
-# Get embeddings for all drug names
-drug_embeddings = torch.vstack([get_embeddings(name) for name in drug_names])
-
-# Spell correction setup
-sym_spell = SymSpell(max_dictionary_edit_distance=2)
-sym_spell.create_dictionary_entry("drug_name", 1)
-for name in drug_names:
-    sym_spell.create_dictionary_entry(name, 1)
-
-# Prediction function
-def predict_drug_name(input_text):
-    input_text = input_text.lower()
-    input_embedding = get_embeddings(input_text)
-    
-    # Correct spelling if necessary
-    suggestions = sym_spell.lookup(input_text, Verbosity.CLOSEST, max_edit_distance=2)
-    if suggestions:
-        input_text = suggestions[0].term
-        input_embedding = get_embeddings(input_text)
-    
-    # Calculate similarity
-    similarities = cosine_similarity(input_embedding, drug_embeddings)
-    best_match_index = np.argmax(similarities)
-    return drug_names[best_match_index]
-
-# Batch testing function
-def test_model(test_file):
-    test_df = pd.read_csv(test_file)
-    correct_predictions = 0
-    
-    for index, row in test_df.iterrows():
-        predicted_drug_name = predict_drug_name(row['input_text'])
-        if predicted_drug_name == row['correct_drug_name'].lower():  # Ensure case insensitivity
-            correct_predictions += 1
-    
-    accuracy = (correct_predictions / len(test_df)) * 100
-    return accuracy
-
-# Streamlit app
-st.title("Doctor's Handwritten Prescription Prediction")
-
-# Single input prediction
-input_text = st.text_input("Enter the partial or misspelled drug name:")
-if st.button("Predict"):
-    if input_text:
-        predicted_drug_name = predict_drug_name(input_text)
-        st.write(f"Predicted Drug Name: {predicted_drug_name}")
+def load_drug_names(drug_names_file):
+    """Load drug names from a CSV file."""
+    df = pd.read_csv(drug_names_file)
+    if 'drug_name' in df.columns:
+        return df['drug_name'].dropna().tolist()
     else:
-        st.write("Please enter a drug name to predict.")
+        raise ValueError("CSV file must contain a column named 'drug_name'")
 
-# Batch testing
-st.header("Batch Testing")
-uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
-if uploaded_file is not None:
-    st.write("Uploaded file preview:")
-    test_df = pd.read_csv(uploaded_file)
-    st.write(test_df.head())
-    
-    if st.button("Start Batch Testing"):
-        accuracy = test_model(uploaded_file)
-        st.write(f"Accuracy: {accuracy:.2f}%")
+def build_index(drug_names):
+    """Build FAISS index for drug names embeddings."""
+    embeddings = np.array([get_embedding(name) for name in drug_names])
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings)
+    return index
 
+def predict_drug_name(predicted_text, index, drug_names):
+    """Predict the most likely drug name from a list based on predicted text."""
+    predicted_embedding = get_embedding(predicted_text)
+    _, indices = index.search(predicted_embedding, k=5)
+    matches = [(drug_names[i], _) for i in indices[0]]
+    return matches
+
+# Streamlit UI
+st.title('Doctor\'s Handwritten Prescription Prediction')
+
+# Upload drug names file
+st.subheader('Upload Drug Names File')
+drug_names_file = st.file_uploader("Choose a CSV file with drug names", type="csv")
+
+drug_names = []
+index = None
+if drug_names_file is not None:
+    try:
+        # Load drug names from the uploaded file
+        drug_names = load_drug_names(drug_names_file)
+        index = build_index(drug_names)
+        st.write("Drug names loaded successfully.")
+        st.write(drug_names[:10])  # Show a preview of loaded drug names
+    except Exception as e:
+        st.error(f"Error loading drug names file: {e}")
+
+# Input field for real-time handwriting input
+st.subheader('Write Prescription on the Whiteboard')
+st.write("Use your stylus to write the prescription below:")
+
+# For demonstration purposes, we will use an uploaded image as a substitute for whiteboard input
+uploaded_image = st.file_uploader("Choose an image file of handwritten text", type="png,jpg,jpeg")
+
+if uploaded_image is not None and index is not None:
+    try:
+        # Use EasyOCR to extract text from the image
+        image = uploaded_image.read()
+        text = ocr_reader.readtext(image, detail=0, paragraph=False)
+        extracted_text = ' '.join(text)
+        st.write("Extracted Text:")
+        st.write(extracted_text)
+
+        if extracted_text:
+            matches = predict_drug_name(extracted_text, index, drug_names)
+            st.write("Top Matches:")
+            for drug_name, score in matches:
+                st.write(f"{drug_name}: {score:.2f}")
+    except Exception as e:
+        st.error(f"Error processing image: {e}")
