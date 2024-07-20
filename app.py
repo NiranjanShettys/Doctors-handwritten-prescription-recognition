@@ -5,6 +5,8 @@ from symspellpy.symspellpy import SymSpell, Verbosity
 import streamlit as st
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import pickle
+import time
 
 # Load the dataset
 try:
@@ -33,8 +35,31 @@ def get_embeddings(text):
         outputs = model(**inputs)
     return outputs.last_hidden_state.mean(dim=1)
 
-# Get embeddings for all drug names
-drug_embeddings = torch.vstack([get_embeddings(name) for name in drug_names])
+# Batch embedding function
+def get_batch_embeddings(texts):
+    inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1)
+
+# Check if precomputed embeddings exist
+try:
+    with open('drug_embeddings.pkl', 'rb') as f:
+        drug_embeddings = pickle.load(f)
+except FileNotFoundError:
+    # Get embeddings for all drug names in batches
+    batch_size = 32
+    embeddings = []
+    for i in range(0, len(drug_names), batch_size):
+        batch_texts = drug_names[i:i + batch_size]
+        batch_embeddings = get_batch_embeddings(batch_texts)
+        embeddings.append(batch_embeddings)
+
+    drug_embeddings = torch.vstack(embeddings)
+
+    # Save embeddings for future use
+    with open('drug_embeddings.pkl', 'wb') as f:
+        pickle.dump(drug_embeddings, f)
 
 # Spell correction setup
 sym_spell = SymSpell(max_dictionary_edit_distance=2)
@@ -60,19 +85,60 @@ def predict_drug_name(input_text):
 
 # Batch testing function
 def test_model(test_file):
-    test_df = pd.read_csv(test_file)
+    try:
+        test_df = pd.read_csv(test_file)
+    except Exception as e:
+        st.error(f"Error reading test CSV file: {e}")
+        return None
+    
     st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
     if 'input_text' not in test_df.columns or 'correct_drug_name' not in test_df.columns:
         st.error("Test file must contain 'input_text' and 'correct_drug_name' columns.")
         return None
     
     correct_predictions = 0
-    for index, row in test_df.iterrows():
-        predicted_drug_name = predict_drug_name(row['input_text'])
-        if predicted_drug_name == row['correct_drug_name'].lower():  # Ensure case insensitivity
-            correct_predictions += 1
+    batch_size = 32
+    input_texts = test_df['input_text'].tolist()
+    correct_drug_names = test_df['correct_drug_name'].tolist()
+    total_batches = len(input_texts) // batch_size + (1 if len(input_texts) % batch_size != 0 else 0)
+    
+    start_time = time.time()
+    
+    results = []
+    
+    for i in range(total_batches):
+        batch_texts = input_texts[i * batch_size:(i + 1) * batch_size]
+        batch_correct_names = correct_drug_names[i * batch_size:(i + 1) * batch_size]
+        batch_embeddings = get_batch_embeddings(batch_texts)
+        
+        for j, input_embedding in enumerate(batch_embeddings):
+            input_embedding = input_embedding.unsqueeze(0)
+            similarities = cosine_similarity(input_embedding, drug_embeddings)
+            best_match_index = np.argmax(similarities)
+            predicted_drug_name = drug_names[best_match_index]
+            
+            if predicted_drug_name == batch_correct_names[j].lower():
+                correct_predictions += 1
+            results.append({
+                'input_text': batch_texts[j],
+                'predicted_drug_name': predicted_drug_name
+            })
     
     accuracy = (correct_predictions / len(test_df)) * 100
+    end_time = time.time()
+    
+    st.write(f"Time taken for batch testing: {end_time - start_time:.2f} seconds")
+    
+    results_df = pd.DataFrame(results)
+    results_df.to_csv('predictions.csv', index=False)
+    st.write("Batch testing completed. You can download the predictions file below.")
+    st.download_button(
+        label="Download Predictions",
+        data=results_df.to_csv(index=False).encode('utf-8'),
+        file_name='predictions.csv',
+        mime='text/csv',
+    )
+    
     return accuracy
 
 # Streamlit app
@@ -92,9 +158,12 @@ st.header("Batch Testing")
 uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
 if uploaded_file is not None:
     st.write("Uploaded file preview:")
-    test_df = pd.read_csv(uploaded_file)
-    st.write(test_df.head())
-    st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
+    try:
+        test_df = pd.read_csv(uploaded_file)
+        st.write(test_df.head())
+        st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
+    except Exception as e:
+        st.error(f"Error reading uploaded file: {e}")
     
     if st.button("Start Batch Testing"):
         accuracy = test_model(uploaded_file)
