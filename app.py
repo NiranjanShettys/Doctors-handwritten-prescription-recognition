@@ -38,7 +38,7 @@ def get_embeddings(text):
 
 # Batch embedding function
 def get_batch_embeddings(texts):
-    inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True)
+    inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True, padding_strategy='longest')
     with torch.no_grad():
         outputs = model(**inputs)
     return outputs.last_hidden_state.mean(dim=1)
@@ -75,7 +75,7 @@ def predict_drug_name(input_text):
         input_embedding = get_embeddings(input_text)
     
     # Calculate similarity
-    similarities = cosine_similarity(input_embedding, drug_embeddings)
+    similarities = cosine_similarity(input_embedding.numpy(), drug_embeddings.numpy())
     best_match_index = np.argmax(similarities)
     return drug_names[best_match_index]
 
@@ -109,7 +109,7 @@ def test_model(test_file):
         
         for j, input_embedding in enumerate(batch_embeddings):
             input_embedding = input_embedding.unsqueeze(0)
-            similarities = cosine_similarity(input_embedding, drug_embeddings)
+            similarities = cosine_similarity(input_embedding.numpy(), drug_embeddings.numpy())
             best_match_index = np.argmax(similarities)
             predicted_drug_name = drug_names[best_match_index]
             
