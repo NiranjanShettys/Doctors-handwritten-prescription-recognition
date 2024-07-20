@@ -56,7 +56,7 @@ def test_model(test_file):
     
     for index, row in test_df.iterrows():
         predicted_drug_name = predict_drug_name(row['input_text'])
-        if predicted_drug_name == row['correct_drug_name']:
+        if predicted_drug_name == row['correct_drug_name'].lower():  # Ensure case insensitivity
             correct_predictions += 1
     
     accuracy = (correct_predictions / len(test_df)) * 100
@@ -74,9 +74,15 @@ if st.button("Predict"):
     else:
         st.write("Please enter a drug name to predict.")
 
-# Batch testin
-st.write("Batch Testing")
+# Batch testing
+st.header("Batch Testing")
 uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
 if uploaded_file is not None:
-    accuracy = test_model(uploaded_file)
-    st.write(f"Accuracy: {accuracy:.2f}%")
+    st.write("Uploaded file preview:")
+    test_df = pd.read_csv(uploaded_file)
+    st.write(test_df.head())
+    
+    if st.button("Start Batch Testing"):
+        accuracy = test_model(uploaded_file)
+        st.write(f"Accuracy: {accuracy:.2f}%")
+
