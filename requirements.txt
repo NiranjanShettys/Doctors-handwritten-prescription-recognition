@@ -1,9 +1,8 @@
 pandas
 torch
 transformers
-symspellpy
 streamlit
-scikit-learn
 numpy
-pickle-mixin
+scikit-learn
+symspellpy
 joblib
