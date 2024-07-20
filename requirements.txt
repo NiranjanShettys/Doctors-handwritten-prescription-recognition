@@ -5,4 +5,4 @@ streamlit
 numpy
 scikit-learn
 symspellpy
-joblib
+faiss-cpu
