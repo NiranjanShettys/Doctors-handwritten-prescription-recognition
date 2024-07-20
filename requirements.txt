@@ -1,6 +1,6 @@
-pandas
-transformers
-torch
-scikit-learn
-symspellpy
 streamlit
+torch
+transformers
+easyocr
+pandas
+faiss-cpu
