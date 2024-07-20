@@ -1,12 +1,13 @@
 import pandas as pd
 import torch
-from transformers import BertTokenizer, BertModel
+from transformers import DistilBertTokenizer, DistilBertModel
 from symspellpy.symspellpy import SymSpell, Verbosity
 import streamlit as st
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import pickle
 import time
+from joblib import Parallel, delayed
 
 # Load the dataset
 try:
@@ -24,9 +25,9 @@ except Exception as e:
 # Preprocess the drug names
 drug_names = [name.lower() for name in drug_names]
 
-# Load BERT model and tokenizer
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-model = BertModel.from_pretrained('bert-base-uncased')
+# Load DistilBERT model and tokenizer
+tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+model = DistilBertModel.from_pretrained('distilbert-base-uncased')
 
 # Function to get embeddings
 def get_embeddings(text):
@@ -47,14 +48,9 @@ try:
     with open('drug_embeddings.pkl', 'rb') as f:
         drug_embeddings = pickle.load(f)
 except FileNotFoundError:
-    # Get embeddings for all drug names in batches
-    batch_size = 32
-    embeddings = []
-    for i in range(0, len(drug_names), batch_size):
-        batch_texts = drug_names[i:i + batch_size]
-        batch_embeddings = get_batch_embeddings(batch_texts)
-        embeddings.append(batch_embeddings)
-
+    # Get embeddings for all drug names in parallel
+    num_cores = 8  # Adjust this based on your CPU cores
+    embeddings = Parallel(n_jobs=num_cores)(delayed(get_embeddings)(name) for name in drug_names)
     drug_embeddings = torch.vstack(embeddings)
 
     # Save embeddings for future use
