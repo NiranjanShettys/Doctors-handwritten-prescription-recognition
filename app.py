@@ -74,7 +74,7 @@ if st.button("Predict"):
     else:
         st.write("Please enter a drug name to predict.")
 
-# Batch testing
+# Batch testin
 st.write("Batch Testing")
 uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
 if uploaded_file is not None:
