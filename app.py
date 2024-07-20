@@ -14,11 +14,11 @@ def load_drug_names(file_path):
     try:
         df = pd.read_csv(file_path)
         st.write("CSV Columns:", df.columns.tolist())  # Debugging line to print column names
-        if 'drug_name' in df.columns:
-            drug_names = df['drug_name'].dropna().tolist()  # Drop NaN values
+        if 'drug_names' in df.columns:
+            drug_names = df['drug_names'].dropna().tolist()  # Drop NaN values
             return [name.lower() for name in drug_names]
         else:
-            st.error("Column 'drug_name' not found in the CSV file. Please check the column names.")
+            st.error("Column 'drug_names' not found in the CSV file. Please check the column names.")
             st.stop()
     except Exception as e:
         st.error(f"Error reading CSV file: {e}")
