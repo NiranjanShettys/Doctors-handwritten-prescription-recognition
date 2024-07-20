@@ -1,6 +1,9 @@
-streamlit
-torch
-transformers
-easyocr
+fastapi
+uvicorn
+pydantic
 pandas
-faiss-cpu
+numpy
+Pillow
+torch
+torchvision
+scikit-learn
