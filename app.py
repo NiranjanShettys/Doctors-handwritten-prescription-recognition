@@ -8,7 +8,7 @@ import numpy as np
 
 # Load the dataset
 df = pd.read_csv('drug_names.csv')
-drug_names = df['drug_name'].tolist()
+drug_names = df['drug_names'].tolist()
 
 # Preprocess the drug names
 drug_names = [name.lower() for name in drug_names]
