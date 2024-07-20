@@ -10,20 +10,21 @@ import time
 from joblib import Parallel, delayed
 
 # Load the dataset
-try:
-    df = pd.read_csv('drug_names.csv')
-    st.write("CSV Columns:", df.columns.tolist())  # Debugging line to print column names
-    if 'drug_names' in df.columns:
-        drug_names = df['drug_names'].tolist()
-    else:
-        st.error("Column 'drug_names' not found in the CSV file. Please check the column names.")
+def load_drug_names(file_path):
+    try:
+        df = pd.read_csv(file_path)
+        st.write("CSV Columns:", df.columns.tolist())  # Debugging line to print column names
+        if 'drug_name' in df.columns:
+            drug_names = df['drug_name'].dropna().tolist()  # Drop NaN values
+            return [name.lower() for name in drug_names]
+        else:
+            st.error("Column 'drug_name' not found in the CSV file. Please check the column names.")
+            st.stop()
+    except Exception as e:
+        st.error(f"Error reading CSV file: {e}")
         st.stop()
-except Exception as e:
-    st.error(f"Error reading CSV file: {e}")
-    st.stop()
 
-# Preprocess the drug names
-drug_names = [name.lower() for name in drug_names]
+drug_names = load_drug_names('drug_names.csv')
 
 # Load DistilBERT model and tokenizer
 tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
@@ -38,7 +39,7 @@ def get_embeddings(text):
 
 # Batch embedding function
 def get_batch_embeddings(texts):
-    inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True, padding_strategy='longest')
+    inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True)
     with torch.no_grad():
         outputs = model(**inputs)
     return outputs.last_hidden_state.mean(dim=1)
@@ -65,37 +66,42 @@ for name in drug_names:
 
 # Prediction function
 def predict_drug_name(input_text):
-    input_text = input_text.lower()
+    input_text = input_text.lower().strip()  # Ensure text is stripped of extra spaces
     input_embedding = get_embeddings(input_text)
     
     # Correct spelling if necessary
     suggestions = sym_spell.lookup(input_text, Verbosity.CLOSEST, max_edit_distance=2)
     if suggestions:
-        input_text = suggestions[0].term
-        input_embedding = get_embeddings(input_text)
+        corrected_text = suggestions[0].term
+        input_embedding = get_embeddings(corrected_text)
+    else:
+        corrected_text = input_text
     
     # Calculate similarity
     similarities = cosine_similarity(input_embedding.numpy(), drug_embeddings.numpy())
     best_match_index = np.argmax(similarities)
-    return drug_names[best_match_index]
+    predicted_drug_name = drug_names[best_match_index]
+    
+    st.write(f"Input Text: {input_text}")
+    st.write(f"Corrected Text: {corrected_text}")
+    return predicted_drug_name
 
 # Batch testing function
 def test_model(test_file):
     try:
         test_df = pd.read_csv(test_file)
+        st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
+        if 'input_text' not in test_df.columns or 'correct_drug_name' not in test_df.columns:
+            st.error("Test file must contain 'input_text' and 'correct_drug_name' columns.")
+            return None
     except Exception as e:
         st.error(f"Error reading test CSV file: {e}")
         return None
     
-    st.write("Test CSV Columns:", test_df.columns.tolist())  # Debugging line to print column names
-    if 'input_text' not in test_df.columns or 'correct_drug_name' not in test_df.columns:
-        st.error("Test file must contain 'input_text' and 'correct_drug_name' columns.")
-        return None
-    
     correct_predictions = 0
     batch_size = 32
-    input_texts = test_df['input_text'].tolist()
-    correct_drug_names = test_df['correct_drug_name'].tolist()
+    input_texts = test_df['input_text'].dropna().tolist()
+    correct_drug_names = test_df['correct_drug_name'].dropna().tolist()
     total_batches = len(input_texts) // batch_size + (1 if len(input_texts) % batch_size != 0 else 0)
     
     start_time = time.time()
