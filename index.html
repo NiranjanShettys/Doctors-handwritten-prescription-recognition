@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Handwriting Recognition</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        canvas { border: 1px solid #000; }
+        #prediction { font-size: 24px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Write on the Whiteboard</h1>
+    <canvas id="whiteboard" width="800" height="400"></canvas>
+    <button onclick="sendToServer()">Get Prediction</button>
+    <div id="prediction">Predicted Drug Name will appear here</div>
+
+    <script>
+        const canvas = document.getElementById('whiteboard');
+        const ctx = canvas.getContext('2d');
+        let drawing = false;
+
+        canvas.addEventListener('mousedown', () => drawing = true);
+        canvas.addEventListener('mouseup', () => drawing = false);
+        canvas.addEventListener('mousemove', draw);
+
+        function draw(event) {
+            if (!drawing) return;
+            ctx.lineWidth = 5;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#000';
+
+            ctx.lineTo(event.clientX - canvas.offsetLeft, event.clientY - canvas.offsetTop);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(event.clientX - canvas.offsetLeft, event.clientY - canvas.offsetTop);
+        }
+
+        function sendToServer() {
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('file', blob, 'whiteboard.png');
+
+                const response = await fetch('http://localhost:8000/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                document.getElementById('prediction').innerText = result.predicted_drug_name;
+            });
+        }
+    </script>
+</body>
+</html>
