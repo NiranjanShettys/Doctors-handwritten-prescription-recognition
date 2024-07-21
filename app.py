@@ -1,79 +1,66 @@
 import pandas as pd
 import torch
-from transformers import DistilBertTokenizer, DistilBertModel
+from transformers import BertTokenizer, BertModel
 from symspellpy.symspellpy import SymSpell, Verbosity
 import streamlit as st
+from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-import pickle
-import faiss
 
 # Load the dataset
-def load_drug_names(file_path):
-    try:
-        df = pd.read_csv(file_path)
-        st.write("CSV Columns:", df.columns.tolist())  # Debugging line to print column names
-        if 'drug_names' in df.columns:
-            drug_names = df['drug_names'].dropna().tolist()  # Drop NaN values
-            return [name.lower() for name in drug_names]
-        else:
-            st.error("Column 'drug_names' not found in the CSV file. Please check the column names.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Error reading CSV file: {e}")
-        st.stop()
+df = pd.read_csv('drug_names.csv')
+drug_names = df['drug_names'].tolist()
 
-drug_names = load_drug_names('drug_names.csv')
+# Preprocess the drug names
+drug_names = [name.lower() for name in drug_names]
 
-# Load DistilBERT model and tokenizer
-tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-model = DistilBertModel.from_pretrained('distilbert-base-uncased')
+# Load BERT model and tokenizer
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+model = BertModel.from_pretrained('bert-base-uncased')
 
 # Function to get embeddings
-def get_embeddings(texts):
-    inputs = tokenizer(texts, return_tensors='pt', truncation=True, padding=True)
+def get_embeddings(text):
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
     with torch.no_grad():
         outputs = model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1).numpy()
+    return outputs.last_hidden_state.mean(dim=1)
 
-# Check if precomputed embeddings exist
-try:
-    with open('drug_embeddings.pkl', 'rb') as f:
-        drug_embeddings = pickle.load(f)
-except FileNotFoundError:
-    # Get embeddings for all drug names
-    embeddings = get_embeddings(drug_names)
-    drug_embeddings = np.vstack(embeddings)
-
-    # Save embeddings for future use
-    with open('drug_embeddings.pkl', 'wb') as f:
-        pickle.dump(drug_embeddings, f)
-
-# Build FAISS index
-dimension = drug_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(drug_embeddings)
+# Get embeddings for all drug names
+drug_embeddings = torch.vstack([get_embeddings(name) for name in drug_names])
 
 # Spell correction setup
 sym_spell = SymSpell(max_dictionary_edit_distance=2)
+sym_spell.create_dictionary_entry("drug_name", 1)
 for name in drug_names:
     sym_spell.create_dictionary_entry(name, 1)
 
 # Prediction function
 def predict_drug_name(input_text):
-    input_text = input_text.lower().strip()
+    input_text = input_text.lower()
+    input_embedding = get_embeddings(input_text)
+    
+    # Correct spelling if necessary
     suggestions = sym_spell.lookup(input_text, Verbosity.CLOSEST, max_edit_distance=2)
     if suggestions:
-        corrected_text = suggestions[0].term
-    else:
-        corrected_text = input_text
+        input_text = suggestions[0].term
+        input_embedding = get_embeddings(input_text)
     
-    input_embedding = get_embeddings([corrected_text])
-    distances, indices = index.search(input_embedding, 1)
-    predicted_drug_name = drug_names[indices[0][0]]
+    # Calculate similarity
+    similarities = cosine_similarity(input_embedding, drug_embeddings)
+    best_match_index = np.argmax(similarities)
+    return drug_names[best_match_index]
+
+# Batch testing function
+def test_model(test_file):
+    test_df = pd.read_csv(test_file)
+    correct_predictions = 0
     
-    st.write(f"Input Text: {input_text}")
-    st.write(f"Corrected Text: {corrected_text}")
-    return predicted_drug_name
+    for index, row in test_df.iterrows():
+        predicted_drug_name = predict_drug_name(row['input_text'])
+        if predicted_drug_name == row['correct_drug_name'].lower():  # Ensure case insensitivity
+            correct_predictions += 1
+    
+    accuracy = (correct_predictions / len(test_df)) * 100
+    return accuracy
 
 # Streamlit app
 st.title("Doctor's Handwritten Prescription Prediction")
@@ -86,3 +73,16 @@ if st.button("Predict"):
         st.write(f"Predicted Drug Name: {predicted_drug_name}")
     else:
         st.write("Please enter a drug name to predict.")
+
+# Batch testing
+st.header("Batch Testing")
+uploaded_file = st.file_uploader("Choose a CSV file for batch testing", type="csv")
+if uploaded_file is not None:
+    st.write("Uploaded file preview:")
+    test_df = pd.read_csv(uploaded_file)
+    st.write(test_df.head())
+    
+    if st.button("Start Batch Testing"):
+        accuracy = test_model(uploaded_file)
+        st.write(f"Accuracy: {accuracy:.2f}%")
+
