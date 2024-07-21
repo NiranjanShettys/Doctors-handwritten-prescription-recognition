@@ -63,7 +63,14 @@ def test_model(test_file):
     return accuracy
 
 # Streamlit app
-st.title("Doctor's Handwritten Prescription Prediction")
+st.title("PharmaPredict: Doctor's Handwritten Prescription Prediction")
+
+# Add the front-end tag line
+st.markdown("""
+    <h3 style='text-align: center; color: grey;'>
+        Empowering doctors with the art of simplicity: PharmaPredict brings the future of digital prescriptions to your fingertips, where technology meets care.
+    </h3>
+""", unsafe_allow_html=True)
 
 # Single input prediction
 input_text = st.text_input("Enter the partial or misspelled drug name:")
@@ -85,4 +92,3 @@ if uploaded_file is not None:
     if st.button("Start Batch Testing"):
         accuracy = test_model(uploaded_file)
         st.write(f"Accuracy: {accuracy:.2f}%")
-
